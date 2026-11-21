@@ -1,0 +1,488 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>鸟群 · 跟着鼠标飞</title>
+<style>
+  :root{
+    --bg:#080a10;
+    --panel:rgba(16,20,30,.72);
+    --line:rgba(120,170,255,.16);
+    --txt:#cdd7e8;
+    --dim:#6f7d93;
+    --hot:#7cc4ff;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%;overflow:hidden;background:var(--bg)}
+  body{font:12px/1.5 "Segoe UI","Microsoft YaHei",system-ui,sans-serif;color:var(--txt);cursor:crosshair}
+  #c{display:block;width:100vw;height:100vh}
+
+  #hud{
+    position:fixed;top:14px;right:14px;width:250px;padding:14px 15px 10px;
+    background:var(--panel);border:1px solid var(--line);border-radius:12px;
+    backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);
+    box-shadow:0 8px 30px rgba(0,0,0,.45);user-select:none;
+    transition:opacity .25s,transform .25s;
+  }
+  #hud.hide{opacity:0;transform:translateX(14px);pointer-events:none}
+  #hud .title{font-size:13px;letter-spacing:.08em;color:#eaf1ff;margin-bottom:6px}
+  #hud .sub{color:var(--dim);font-size:11px;line-height:1.7;margin-bottom:10px}
+  #hud .sub b{color:var(--hot);font-weight:500}
+  #hud .crow{font-size:11px;color:var(--dim);margin-bottom:6px}
+  #hud .crow b{color:#9fd8ff;font-weight:500}
+
+  .row{display:flex;align-items:center;gap:8px;margin:7px 0;font-size:11px;color:var(--dim)}
+  .row .nm{width:34px;flex:none}
+  .row input[type=range]{
+    -webkit-appearance:none;appearance:none;flex:1;height:3px;border-radius:2px;
+    background:rgba(120,170,255,.18);outline:none;cursor:pointer;
+  }
+  .row input[type=range]::-webkit-slider-thumb{
+    -webkit-appearance:none;width:11px;height:11px;border-radius:50%;
+    background:#8fd0ff;box-shadow:0 0 8px rgba(120,200,255,.8);cursor:pointer;
+  }
+  .row input[type=range]::-moz-range-thumb{
+    width:11px;height:11px;border:0;border-radius:50%;
+    background:#8fd0ff;box-shadow:0 0 8px rgba(120,200,255,.8);cursor:pointer;
+  }
+  .row .val{width:38px;flex:none;text-align:right;color:#9fb4d0;font-variant-numeric:tabular-nums}
+
+  #hint{position:fixed;left:16px;bottom:14px;color:#4d5a6e;font-size:11px;letter-spacing:.05em;user-select:none}
+  #hint b{color:#7cc4ff;font-weight:500}
+  #state{position:fixed;left:16px;top:14px;font-size:11px;color:#4d5a6e;letter-spacing:.1em}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+
+<div id="state">FOLLOW</div>
+
+<div id="hud">
+  <div class="title">鸟群 · 跟着鼠标飞</div>
+  <div class="sub">
+    <b>移动鼠标</b> 领飞 · <b>按住左键</b> 惊飞<br>
+    <b>空格</b> 暂停 · <b>R</b> 重置 · <b>H</b> 收起 · <b>C</b> 换配色
+  </div>
+  <div class="crow">配色：<b id="cmode">速度</b></div>
+  <label class="row"><span class="nm">数量</span><input id="s-count" type="range" min="100" max="3000" step="100" value="900"><span class="val" id="v-count">900</span></label>
+  <label class="row"><span class="nm">分离</span><input id="s-sep" type="range" min="0" max="3" step="0.05" value="2.00"><span class="val" id="v-sep">2.00</span></label>
+  <label class="row"><span class="nm">对齐</span><input id="s-ali" type="range" min="0" max="2.5" step="0.05" value="1.00"><span class="val" id="v-ali">1.00</span></label>
+  <label class="row"><span class="nm">聚合</span><input id="s-coh" type="range" min="0" max="2.5" step="0.05" value="0.60"><span class="val" id="v-coh">0.60</span></label>
+  <label class="row"><span class="nm">跟随</span><input id="s-flw" type="range" min="0" max="3" step="0.05" value="1.00"><span class="val" id="v-flw">1.00</span></label>
+  <label class="row"><span class="nm">盘旋</span><input id="s-orb" type="range" min="0" max="1.2" step="0.05" value="0.75"><span class="val" id="v-orb">0.75</span></label>
+  <label class="row"><span class="nm">视野</span><input id="s-vis" type="range" min="30" max="150" step="2" value="70"><span class="val" id="v-vis">70</span></label>
+</div>
+
+<div id="hint">左键按住 = 从「跟随」切到「惊飞」，松开自动回来</div>
+
+<script>
+(function () {
+  'use strict';
+
+  var cvs = document.getElementById('c');
+  var ctx = cvs.getContext('2d', { alpha: false });
+  var W = 0, H = 0, DPR = 1;
+
+  // ---------------- 参数 ----------------
+  var P = {
+    count: 900,
+    rSep: 26,        // 分离半径(px)
+    rAli: 70,        // 对齐/聚合半径(px)
+    wSep: 2.0,
+    wAli: 1.0,
+    wCoh: 0.60,
+    wFollow: 1.00,   // 鼠标引力
+    orbit: 0.75,     // 切向分量：>0 会绕着鼠标盘旋而不是撞上去
+    vMin: 1.6,
+    vMax: 5.4,
+    maxForce: 0.26,
+    margin: 70,
+    wMargin: 2.4,
+    trail: 0.17,     // 每帧背景覆盖不透明度，越小尾巴越长
+    colorMode: 0,    // 0=速度(默认) 1=单色流光 2=方向色环
+    paused: false
+  };
+
+  // ---------------- 状态 ----------------
+  var N = 0;
+  var px, py, vx, vy;                  // 平行数组
+  var cellHead = new Int32Array(0);    // 空间网格：桶头
+  var next = new Int32Array(0);        // 桶内链表
+  var pointer = { x: 0, y: 0, inside: false, down: false };
+  var tick = 0;
+
+  function modeScatter() { return pointer.down; }
+
+  // ---------------- 画布 ----------------
+  function resize() {
+    DPR = Math.min(window.devicePixelRatio || 1, 2);
+    W = cvs.clientWidth || window.innerWidth;
+    H = cvs.clientHeight || window.innerHeight;
+    cvs.width = Math.round(W * DPR);
+    cvs.height = Math.round(H * DPR);
+    ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+    ctx.fillStyle = '#080a10';
+    ctx.fillRect(0, 0, W, H);
+  }
+
+  // ---------------- 初始化鸟群 ----------------
+  function spawn(n) {
+    var oldN = N;
+    var npx = new Float32Array(n), npy = new Float32Array(n);
+    var nvx = new Float32Array(n), nvy = new Float32Array(n);
+    var cx = pointer.inside ? pointer.x : W * 0.5;
+    var cy = pointer.inside ? pointer.y : H * 0.5;
+    var spread = Math.min(W, H) * 0.22;
+
+    for (var i = 0; i < n; i++) {
+      if (i < oldN) {                     // 老个体原地保留
+        npx[i] = px[i]; npy[i] = py[i]; nvx[i] = vx[i]; nvy[i] = vy[i];
+        continue;
+      }
+      // 新个体：绕初始中心的高斯分布
+      var a = Math.random() * Math.PI * 2;
+      var r = Math.sqrt(Math.random()) * spread;
+      npx[i] = cx + Math.cos(a) * r * 1.4;
+      npy[i] = cy + Math.sin(a) * r;
+      var ang = Math.random() * Math.PI * 2;
+      var sp = P.vMin + Math.random() * (P.vMax - P.vMin) * 0.8;
+      nvx[i] = Math.cos(ang) * sp;
+      nvy[i] = Math.sin(ang) * sp;
+    }
+    px = npx; py = npy; vx = nvx; vy = nvy;
+    N = n;
+    next = new Int32Array(N);
+  }
+
+  // ---------------- 一步仿真 ----------------
+  function step() {
+    var rSep = P.rSep, rAli = P.rAli;
+    var r2sep = rSep * rSep, r2ali = rAli * rAli;
+    var wSep = P.wSep, wAli = P.wAli, wCoh = P.wCoh;
+    var scatter = modeScatter();
+    var mx = pointer.x, my = pointer.y;
+    var active = pointer.inside && (P.wFollow > 0);
+    var orbit = P.orbit * (scatter ? -1 : 1);
+    var sgn = scatter ? -1 : 1;
+    var maxF = P.maxForce, vMin = P.vMin, vMax = P.vMax;
+    var margin = P.margin, wMargin = P.wMargin;
+    var i, j, ddx, ddy, d2;
+
+    // --- 建网格 (链表桶) ---
+    var cell = Math.max(20, rAli);
+    var cols = Math.max(1, Math.ceil(W / cell));
+    var rows = Math.max(1, Math.ceil(H / cell));
+    var nc = cols * rows;
+    if (cellHead.length !== nc) cellHead = new Int32Array(nc);
+    cellHead.fill(-1);
+    if (next.length !== N) next = new Int32Array(N);
+    for (i = 0; i < N; i++) {
+      var gx = px[i] / cell | 0, gy = py[i] / cell | 0;
+      if (gx < 0) gx = 0; else if (gx >= cols) gx = cols - 1;
+      if (gy < 0) gy = 0; else if (gy >= rows) gy = rows - 1;
+      var gi = gy * cols + gx;
+      next[i] = cellHead[gi];
+      cellHead[gi] = i;
+    }
+
+    // --- 逐个体求合力 ---
+    for (i = 0; i < N; i++) {
+      var sepX = 0, sepY = 0;
+      var aliX = 0, aliY = 0, nAli = 0;
+      var cohX = 0, cohY = 0, nCoh = 0;
+
+      var cgx = px[i] / cell | 0, cgy = py[i] / cell | 0;
+      if (cgx < 0) cgx = 0; else if (cgx >= cols) cgx = cols - 1;
+      if (cgy < 0) cgy = 0; else if (cgy >= rows) cgy = rows - 1;
+
+      for (var oy = -1; oy <= 1; oy++) {
+        var yy = cgy + oy;
+        if (yy < 0 || yy >= rows) continue;
+        for (var ox = -1; ox <= 1; ox++) {
+          var xx = cgx + ox;
+          if (xx < 0 || xx >= cols) continue;
+          var base = yy * cols + xx;
+          for (j = cellHead[base]; j !== -1; j = next[j]) {
+            if (j === i) continue;
+            ddx = px[i] - px[j];
+            ddy = py[i] - py[j];
+            d2 = ddx * ddx + ddy * ddy;
+            if (d2 < r2ali) {
+              if (d2 < r2sep) {                       // 分离：反比距离
+                var inv = 1 / (d2 < 1e-4 ? 1e-4 : d2);
+                sepX += ddx * inv; sepY += ddy * inv;
+              }
+              aliX += vx[j]; aliY += vy[j]; nAli++;   // 对齐：邻居速度和
+              cohX += px[j]; cohY += py[j]; nCoh++;   // 聚合：邻居位置和
+            }
+          }
+        }
+      }
+
+      var fx = 0, fy = 0, m;
+
+      // 1) 分离
+      m = Math.sqrt(sepX * sepX + sepY * sepY);
+      if (m > 0) { fx += wSep * sepX / m; fy += wSep * sepY / m; }
+
+      // 2) 对齐
+      if (nAli > 0) {
+        var tax = aliX / nAli - vx[i], tay = aliY / nAli - vy[i];
+        m = Math.sqrt(tax * tax + tay * tay);
+        if (m > 1e-6) { fx += wAli * tax / m; fy += wAli * tay / m; }
+      }
+
+      // 3) 聚合
+      if (nCoh > 0) {
+        var tcx = cohX / nCoh - px[i], tcy = cohY / nCoh - py[i];
+        m = Math.sqrt(tcx * tcx + tcy * tcy);
+        if (m > 1e-6) { fx += wCoh * tcx / m; fy += wCoh * tcy / m; }
+      }
+
+      // 4) 鼠标：径向吸引 + 切向分量 → 追着跑并且绕着你转
+      if (active) {
+        var dx = mx - px[i], dy = my - py[i];
+        var dist = Math.sqrt(dx * dx + dy * dy);
+        if (dist > 1e-3) {
+          var f = 1 / (1 + (dist / 650) * (dist / 650));   // 距离衰减
+          var ux = dx / dist, uy = dy / dist;
+          var tx = -uy, ty = ux;                            // 垂直方向
+          var orbF = orbit * f;                             // 远处直冲，近了才盘旋
+          var gx2 = ux + orbF * tx, gy2 = uy + orbF * ty;
+          var gm = Math.sqrt(gx2 * gx2 + gy2 * gy2) || 1;
+          fx += P.wFollow * f * sgn * gx2 / gm;
+          fy += P.wFollow * f * sgn * gy2 / gm;
+        }
+      }
+
+      // 5) 软边界
+      if (px[i] < margin) fx += wMargin * (1 - px[i] / margin);
+      else if (px[i] > W - margin) fx -= wMargin * (1 - (W - px[i]) / margin);
+      if (py[i] < margin) fy += wMargin * (1 - py[i] / margin);
+      else if (py[i] > H - margin) fy -= wMargin * (1 - (H - py[i]) / margin);
+
+      // 限力
+      var fm = Math.sqrt(fx * fx + fy * fy);
+      if (fm > maxF) { var k = maxF / fm; fx *= k; fy *= k; }
+
+      vx[i] += fx; vy[i] += fy;
+
+      // 限速（下界必须有，否则会原地糊成一坨）
+      var sp = Math.sqrt(vx[i] * vx[i] + vy[i] * vy[i]);
+      if (sp < 1e-6) { sp = 1e-6; vx[i] = 1e-6; }
+      var want = sp < vMin ? vMin : (sp > vMax ? vMax : sp);
+      if (want !== sp) { var kk = want / sp; vx[i] *= kk; vy[i] *= kk; }
+
+      px[i] += vx[i]; py[i] += vy[i];
+
+      // 保险：绝不允许跑出画布无限远
+      if (px[i] < -30) { px[i] = -30; vx[i] = Math.abs(vx[i]); }
+      else if (px[i] > W + 30) { px[i] = W + 30; vx[i] = -Math.abs(vx[i]); }
+      if (py[i] < -30) { py[i] = -30; vy[i] = Math.abs(vy[i]); }
+      else if (py[i] > H + 30) { py[i] = H + 30; vy[i] = -Math.abs(vy[i]); }
+    }
+    tick++;
+  }
+
+  // ---------------- 绘制 ----------------
+  var BANDS = 40;
+  var HUE_LO = 177, HUE_SPAN = 106;   // 青(177) → 蓝 → 紫(283)
+  var paths = [];
+  for (var b = 0; b < BANDS; b++) paths.push(null);
+
+  // 每个色带只算一次颜色
+  function bandStyle(k, mode) {
+    var t = k / BANDS;
+    if (mode === 1) return 'hsl(198,90%,' + (44 + 34 * t).toFixed(0) + '%)';   // 单色：亮度表速度
+    if (mode === 2) return 'hsl(' + (t * 360).toFixed(1) + ',85%,62%)';        // 完整色环，首尾闭合
+    return 'hsl(' + (HUE_LO + (t + 0.5 / BANDS) * HUE_SPAN).toFixed(1) +
+           ',88%,' + (56 + 20 * t).toFixed(0) + '%)';                          // 慢=青，快=亮紫
+  }
+
+  function bandOf(norm, ang, mode) {
+    var v;
+    if (mode === 1) {
+      v = (norm * BANDS) | 0;
+    } else if (mode === 2) {
+      // 完整 360° 色环：-π 与 +π 落在同一色相，天然闭合
+      v = ((ang / (Math.PI * 2) + 0.5) * BANDS) | 0;
+    } else {
+      // 色相主体跟着「速度」，方向只做 sin 微调制。
+      // 不能拿 atan2 直接当色相：-π 和 +π 是同一个朝向却落在色环两端，
+      // 整群向左飞时颜色就在青/粉之间来回跳 —— 这就是之前那次颜色突变。
+      // sin(ang) 跨 ±π 连续且导数为 0，不会有任何跳色。
+      var hue = 195 + 70 * norm + 18 * Math.sin(ang);
+      v = ((hue - HUE_LO) / HUE_SPAN * BANDS) | 0;
+    }
+    return v < 0 ? 0 : (v >= BANDS ? BANDS - 1 : v);
+  }
+
+  function draw() {
+    // 半透明覆盖 → 运动残影
+    ctx.fillStyle = 'rgba(8,10,16,' + P.trail + ')';
+    ctx.fillRect(0, 0, W, H);
+
+    ctx.lineCap = 'round';
+    ctx.lineWidth = 1.5;
+
+    for (var b = 0; b < BANDS; b++) paths[b] = null;
+
+    var mode = P.colorMode | 0;
+    var invSpan = 1 / Math.max(0.001, P.vMax - P.vMin);
+
+    for (var i = 0; i < N; i++) {
+      var vx0 = vx[i], vy0 = vy[i];
+      var sp = Math.sqrt(vx0 * vx0 + vy0 * vy0) || 1e-6;
+
+      var norm = (sp - P.vMin) * invSpan;
+      if (norm < 0) norm = 0; else if (norm > 1) norm = 1;
+
+      var ang = Math.atan2(vy0, vx0);
+      var band = bandOf(norm, ang, mode);
+
+      var len = 2.0 + 4.5 * norm;
+      var ix = vx0 / sp, iy = vy0 / sp;
+
+      var p = paths[band];
+      if (!p) { p = paths[band] = new Path2D(); }
+      p.moveTo(px[i], py[i]);
+      p.lineTo(px[i] - ix * len, py[i] - iy * len);
+    }
+
+    for (var k = 0; k < BANDS; k++) {
+      var pa = paths[k];
+      if (!pa) continue;
+      ctx.strokeStyle = bandStyle(k, mode);
+      ctx.stroke(pa);
+    }
+
+    // 指针光环
+    if (pointer.inside) {
+      var pulse = 16 + 5 * Math.sin(tick * 0.12);
+      ctx.beginPath();
+      ctx.arc(pointer.x, pointer.y, pulse, 0, Math.PI * 2);
+      ctx.strokeStyle = modeScatter() ? 'rgba(255,140,140,' + (0.5 + 0.3 * Math.sin(tick * 0.2)) + ')'
+                                      : 'rgba(130,200,255,' + (0.45 + 0.25 * Math.sin(tick * 0.15)) + ')';
+      ctx.lineWidth = 1.2;
+      ctx.stroke();
+
+      ctx.beginPath();
+      ctx.arc(pointer.x, pointer.y, 2, 0, Math.PI * 2);
+      ctx.fillStyle = modeScatter() ? '#ff8f8f' : '#9fd8ff';
+      ctx.fill();
+    }
+  }
+
+  // ---------------- 主循环 ----------------
+  function frame() {
+    if (!P.paused) step();
+    draw();
+    requestAnimationFrame(frame);
+  }
+
+  // ---------------- 交互 ----------------
+  function setPointer(e) {
+    var r = cvs.getBoundingClientRect();
+    pointer.x = e.clientX - r.left;
+    pointer.y = e.clientY - r.top;
+    pointer.inside = true;
+  }
+
+  window.addEventListener('mousemove', setPointer);
+  window.addEventListener('mouseleave', function () { pointer.inside = false; });
+  window.addEventListener('mouseenter', setPointer);
+  cvs.addEventListener('mousedown', function (e) {
+    setPointer(e); pointer.down = true; updateState(); e.preventDefault();
+  });
+  window.addEventListener('mouseup', function () { pointer.down = false; updateState(); });
+  cvs.addEventListener('touchstart', function (e) {
+    if (e.touches[0]) { setPointer(e.touches[0]); pointer.down = true; updateState(); }
+    e.preventDefault();
+  }, { passive: false });
+  window.addEventListener('touchmove', function (e) {
+    if (e.touches[0]) setPointer(e.touches[0]);
+  }, { passive: true });
+  window.addEventListener('touchend', function () { pointer.down = false; updateState(); });
+  window.addEventListener('contextmenu', function (e) { e.preventDefault(); });
+
+  var COLOR_NAMES = ['速度', '单色流光', '方向色环'];
+  function updateColorLabel() {
+    var el = document.getElementById('cmode');
+    if (el) el.textContent = COLOR_NAMES[P.colorMode | 0] || '速度';
+  }
+
+  window.addEventListener('keydown', function (e) {
+    var k = e.key.toLowerCase();
+    if (k === ' ' || e.code === 'Space') { P.paused = !P.paused; e.preventDefault(); }
+    else if (k === 'r') { spawn(P.count); }
+    else if (k === 'h') { document.getElementById('hud').classList.toggle('hide'); }
+    else if (k === 'c') {
+      P.colorMode = ((P.colorMode | 0) + 1) % 3;
+      updateColorLabel();
+    }
+  });
+
+  window.addEventListener('resize', function () {
+    resize();
+    // 窗口变小后把越界的鸟拉回来
+    for (var i = 0; i < N; i++) {
+      if (px[i] > W) px[i] = W - 1;
+      if (py[i] > H) py[i] = H - 1;
+      if (px[i] < 0) px[i] = 1;
+      if (py[i] < 0) py[i] = 1;
+    }
+  });
+
+  var stateEl = document.getElementById('state');
+  function updateState() {
+    stateEl.textContent = modeScatter() ? 'SCATTER' : 'FOLLOW';
+    stateEl.style.color = modeScatter() ? '#ff8f8f' : '#7cc4ff';
+  }
+
+  // ---------------- 面板绑定 ----------------
+  function bind(id, key, fmt, after) {
+    var el = document.getElementById('s-' + id);
+    var out = document.getElementById('v-' + id);
+    function apply() {
+      var v = parseFloat(el.value);
+      P[key] = v;
+      out.textContent = fmt ? fmt(v) : String(v);
+      if (after) after(v);
+    }
+    el.addEventListener('input', apply);
+    apply();
+  }
+
+  // ---------------- 启动 ----------------
+  // 注意顺序：必须先 resize 拿到画布尺寸，spawn 的出生点才落在屏幕中央
+  resize();
+  pointer.x = W * 0.5;
+  pointer.y = H * 0.5;
+  spawn(P.count);
+  updateState();
+  updateColorLabel();
+
+  // 面板绑定放在 spawn 之后：bind 会立刻 apply 一次，此时老个体已就位、只会补齐空缺
+  bind('count', 'count', function (v) { return String(v | 0); }, function (v) { spawn(v | 0); });
+  bind('sep', 'wSep', function (v) { return v.toFixed(2); });
+  bind('ali', 'wAli', function (v) { return v.toFixed(2); });
+  bind('coh', 'wCoh', function (v) { return v.toFixed(2); });
+  bind('flw', 'wFollow', function (v) { return v.toFixed(2); });
+  bind('orb', 'orbit', function (v) { return v.toFixed(2); });
+  bind('vis', 'rAli', function (v) { return String(v | 0); }, function (v) {
+    P.rAli = v;
+    P.rSep = Math.max(10, v * 0.37);   // 分离半径始终小于视野
+  });
+
+  requestAnimationFrame(frame);
+
+  // 暴露给控制台调参
+  window.FLOCK = { P: P, spawn: spawn, step: step, pointer: pointer,
+                   bandOf: bandOf, bandStyle: bandStyle,
+                   get n() { return N; },
+                   get pos() { return { px: px, py: py, vx: vx, vy: vy }; } };
+})();
+</script>
+</body>
+</html>
