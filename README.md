@@ -169,6 +169,12 @@ NaN / 越界          0 / 0
 └── docs/                 # 生成的图 + Pages 部署副本
 ```
 
+> `docs/index.html` 是 `mouse-flock.html` 的 GitHub Pages 部署副本。改了动画记得同步，否则线上和仓库里的会是两个版本：
+>
+> ```bash
+> cp mouse-flock.html docs/index.html
+> ```
+
 ## 依赖
 
 - 动画：任意现代浏览器
