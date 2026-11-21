@@ -2,6 +2,8 @@
 
 Boids（Craig Reynolds, 1986）的三条规则实现 + 一份跟着鼠标飞的交互式动画。
 
+**在线试玩** → <https://kyyyyyy638-hue.github.io/boids-mouse-flock/>
+
 没有任何鸟知道整个群体的样子，它们只知道「自己 + 视野里那几个邻居」。整群的形状、涡旋、分裂与重组，全部从三行加法里长出来。
 
 ![三规则消融对照](docs/boids_ablation.png)
